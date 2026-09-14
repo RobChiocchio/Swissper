@@ -7,8 +7,9 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
 from datasets import Dataset, Audio, DatasetDict, load_from_disk, concatenate_datasets
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
 from transformers import WhisperProcessor
+from collections import Counter, defaultdict
 
 CANTON_TO_REGION = {
     "AG": "AG", # Aargau
@@ -23,17 +24,17 @@ CANTON_TO_REGION = {
     # Northwestern Switzerland -> BS
     "BL": "BS", # Basel-Landschaft
 
-    # InnerSchweiz / Central Switzerland -> LU
+    # Innerschweiz / Central Switzerland -> LU
     "NW": "LU", # Nidwalden
     "SZ": "LU", # Schwyz
     "UR": "LU", # Uri
 
     # Ostschweiz / Eastern Switzerland -> SG
     "GL": "SG", # Glarus
-    "SH": "ZH", # Schaffhausen
+    "SH": "SG", # Schaffhausen
 
     # Schaffhausen -> ZH 
-    # "SH": "ZH", # (Robyn thinks this may be a bad merge)
+    #"SH": "ZH", # (Robyn thinks this may be a bad merge)
 }
 
 LABEL2ID = {
@@ -207,16 +208,74 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
         Audio(sampling_rate=16000),
     )
 
-def create_grouped_split(dataset: Dataset, group_column="doc_id", test_size=0.15, seed=42) -> DatasetDict:
-    groups = np.array(dataset[group_column])
-    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
-    train_indices, val_indices = next(gss.split(X=np.zeros(len(groups)), groups=groups))
+# def create_grouped_split(dataset: Dataset, group_column="doc_id", test_size=0.15, seed=42) -> DatasetDict:
+#     groups = np.array(dataset[group_column])
+#     gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
+#     train_indices, val_indices = next(gss.split(X=np.zeros(len(groups)), groups=groups))
 
+#     return DatasetDict({
+#         "train": dataset.select(train_indices),
+#         "validation": dataset.select(val_indices)
+#     })
+
+def split_archimob(
+    dataset: Dataset, 
+    group_col="doc_id", 
+    label_col="labels", 
+    test_size=0.15, 
+    seed=42,
+    allow_clip_split_for_singletons=True
+) -> DatasetDict:
+    
+    np.random.seed(seed)
+    labels = np.array(dataset[label_col])
+    groups = np.array(dataset[group_col])
+    
+    # Map label -> list of unique doc_ids
+    label_to_docs = defaultdict(set)
+    for doc, lbl in zip(groups, labels):
+        label_to_docs[lbl].add(doc)
+    
+    train_docs = set()
+    val_docs = set()
+    clip_level_val_indices = []
+    
+    for lbl, docs in label_to_docs.items():
+        docs = sorted(list(docs))
+        np.random.shuffle(docs)
+        
+        if len(docs) == 1:
+            doc = docs[0]
+            if allow_clip_split_for_singletons:
+                # Clip-level split for singletons to ensure val coverage
+                doc_indices = np.where(groups == doc)[0]
+                np.random.shuffle(doc_indices)
+                n_val = max(1, int(len(doc_indices) * test_size))
+                clip_level_val_indices.extend(doc_indices[:n_val])
+                # Rest remains in train implicitly
+            else:
+                # Strict group isolation: Force singletons to TRAIN
+                train_docs.add(doc)
+        else:
+            # At least 2 docs: Force at least 1 doc into val, rest proportional
+            n_val_docs = max(1, int(round(len(docs) * test_size)))
+            val_docs.update(docs[:n_val_docs])
+            train_docs.update(docs[n_val_docs:])
+            
+    # Build index masks
+    all_indices = np.arange(len(dataset))
+    
+    val_mask = np.isin(groups, list(val_docs))
+    if allow_clip_split_for_singletons and clip_level_val_indices:
+        val_mask[clip_level_val_indices] = True
+        
+    train_indices = all_indices[~val_mask]
+    val_indices = all_indices[val_mask]
+    
     return DatasetDict({
         "train": dataset.select(train_indices),
         "validation": dataset.select(val_indices)
     })
-
 
 def process_split_in_shards(split_dataset: Dataset, processor: WhisperProcessor, split_name: str, shard_size=3000) -> Dataset:
     """Processes features in fixed-size shards to keep PyArrow memory bounded."""
@@ -245,7 +304,7 @@ def process_split_in_shards(split_dataset: Dataset, processor: WhisperProcessor,
             audios = [sample["array"] for sample in batch["audio"]]
             inputs = processor(audios, sampling_rate=16000, return_tensors="np")
             return {
-                "input_features": inputs.input_features,
+                "input_features": inputs.input_features, # .astype(np.float16)
                 "labels": batch["labels"],
             }
 
@@ -277,7 +336,8 @@ def main():
     raw_dataset = load_archimob_dataset(DATA_DIR)
 
     # Perform group split by doc_id
-    raw_splits = create_grouped_split(raw_dataset, group_column="doc_id")
+    #raw_splits = create_grouped_split(raw_dataset, group_column="doc_id")
+    raw_splits = split_archimob(raw_dataset, group_col="doc_id")
 
     # Process train and validation splits independently in memory-bounded shards
     train_dataset = process_split_in_shards(raw_splits["train"], processor, split_name="train", shard_size=3000)
@@ -295,3 +355,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    ds = load_from_disk(OUTPUT_DIR)
+    ds.set_format("torch")
+    splits = ds.keys() if hasattr(ds, "keys") else ["dataset"]
+
+    ID2LABEL = {0: "AG", 1: "BE", 2: "BS", 3: "GR", 4: "LU", 5: "SG", 6: "VS", 7: "ZH"}
+
+    for split in splits:
+        data = ds[split] if hasattr(ds, "keys") else ds
+        labels = data["labels"]
+        
+        # Handle both PyTorch tensors and standard lists
+        if hasattr(labels, "tolist"):
+            labels = labels.tolist()
+            
+        counts = Counter(l.item() for l in labels)
+        total = len(labels)
+        
+        print(f"=== {split.upper()} SPLIT (Total: {total}) ===")
+        for label_id in range(8):
+            name = ID2LABEL[label_id]
+            count = counts.get(label_id, 0)
+            pct = (count / total * 100) if total > 0 else 0.0
+            print(f"Label {label_id} ({name}): {count:6d} samples ({pct:5.1f}%)")
+        print()
