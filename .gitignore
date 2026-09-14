@@ -209,6 +209,8 @@ pyrightconfig.json
 dataset/
 output/
 bucket/
+SwissDial/
+ArchiMob/
 
 # Gradio cache and temporary files
 .gradio/
