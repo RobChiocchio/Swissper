@@ -1,6 +1,5 @@
 import os
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 import pandas as pd
 from datasets import Dataset, Audio
@@ -42,6 +41,7 @@ AUDIO_DIR = DATA_DIR / "audio_segmented_anonymized"
 METADATA_PATH = DATA_DIR / "Metadata.txt"
 OUTPUT_DIR = "./bucket/archimob-preprocessed"
 
+
 def parse_metadata(metadata_path: Path) -> dict:
     """Parses Metadata.txt and maps DocIDs to target label integers."""
     df = pd.read_csv(metadata_path, sep="\t", dtype=str)
@@ -66,42 +66,13 @@ def parse_metadata(metadata_path: Path) -> dict:
     return doc_to_label
 
 
-def parse_xml_transcripts(xml_path: Path) -> dict:
-    """Parses TEI XML transcripts, mapping utterance IDs to normalized text."""
-    if not xml_path.exists():
-        return {}
-
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    transcripts = {}
-
-    for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag == "u":
-            utt_id = elem.attrib.get("{http://www.w3.org/XML/1998/namespace}id") or elem.attrib.get("id")
-            if not utt_id:
-                continue
-
-            # Aggregate token text and strip duplicate spaces
-            text = "".join(elem.itertext()).strip()
-            text = re.sub(r"\s+", " ", text)
-            
-            transcripts[utt_id] = text
-            # ArchiMob XML IDs often prefix segment filenames with 'd' (e.g., 'd1007_1')
-            if utt_id.startswith("d"):
-                transcripts[utt_id[1:]] = text
-
-    return transcripts
-
-
-def load_archimob_dataset(data_dir: Path) -> Dataset:
-    """Scans folders, pairs audio with transcripts and mapped labels."""
+def load_archimob_dataset() -> Dataset:
+    """Scans folders and pairs audio files directly with region labels."""
     doc_to_label = parse_metadata(METADATA_PATH)
 
     audio_paths = []
     labels = []
     doc_ids = []
-    transcriptions = []
 
     for folder_name in os.listdir(AUDIO_DIR):
         folder_path = AUDIO_DIR / folder_name
@@ -114,21 +85,10 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
         if label is None:
             continue
 
-        # Look for corresponding XML transcript file
-        xml_path = data_dir / f"{folder_name}.xml"
-        if not xml_path.exists():
-            xml_path = data_dir / f"{base_doc_id}.xml"
-
-        transcripts = parse_xml_transcripts(xml_path)
-
         for wav_file in folder_path.glob("*.wav"):
-            segment_id = wav_file.stem
-            text = transcripts.get(segment_id, "")
-
             audio_paths.append(str(wav_file))
             labels.append(label)
             doc_ids.append(base_doc_id)
-            transcriptions.append(text)
 
     print(f"Loaded {len(audio_paths)} matching audio segments.")
 
@@ -136,7 +96,6 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
         "audio": audio_paths,
         "labels": labels,
         "doc_id": doc_ids,
-        "transcription": transcriptions,
     })
 
     return ds.cast_column("audio", Audio(sampling_rate=16000))
@@ -145,7 +104,7 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
 def main():
     processor = WhisperProcessor.from_pretrained(MODEL_ID)
 
-    raw_dataset = load_archimob_dataset(DATA_DIR)
+    raw_dataset = load_archimob_dataset()
 
     def extract_features(batch):
         audios = [sample["array"] for sample in batch["audio"]]
