@@ -211,6 +211,7 @@ output/
 bucket/
 SwissDial*/
 ArchiMob*/
+ASGDTS*/
 
 # Gradio cache and temporary files
 .gradio/

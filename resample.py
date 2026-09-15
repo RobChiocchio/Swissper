@@ -7,6 +7,8 @@ import torchaudio
 #DST_DIR = Path("ArchiMob/audio_segmented_16k")
 SRC_DIR = Path("SwissDial")
 DST_DIR = Path("SwissDial_16k")
+# SRC_DIR = Path("ASGDTS/clips")
+# DST_DIR = Path("ASGDTS/clips_16k")
 TARGET_SR = 16000
 
 def process_file(src_path: Path) -> None:
