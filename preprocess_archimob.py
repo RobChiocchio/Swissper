@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 from datasets import Dataset, Audio, DatasetDict, load_from_disk, concatenate_datasets
 from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold
-from transformers import WhisperProcessor
 from collections import Counter, defaultdict
 
 CANTON_TO_REGION = {
@@ -44,9 +43,9 @@ LABEL2ID = {
 
 MODEL_ID = "Flix-AI/flix-swissgerman-full"
 DATA_DIR = Path("ArchiMob")
-AUDIO_DIR = DATA_DIR / "audio_segmented_anonymized"
+AUDIO_DIR = DATA_DIR / "audio_segmented_16k"
 METADATA_PATH = DATA_DIR / "Metadata.txt"
-OUTPUT_DIR = Path("./bucket/archimob-preprocessed")
+OUTPUT_DIR = Path("./dataset/archimob-preprocessed")
 
 def parse_metadata(metadata_path):
     df = pd.read_csv(metadata_path, sep="\t", dtype=str)
@@ -70,7 +69,7 @@ def parse_metadata(metadata_path):
             "dialect_area": dialect_area,
             "canton": canton,
             "region": region,
-            "label": label,
+            "dialect_code": label,
         }
 
     return metadata
@@ -158,7 +157,7 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
 
         meta = metadata[doc_id]
 
-        if meta["label"] is None:
+        if meta["dialect_code"] is None:
             print(
                 f"WARNING: no region mapping for "
                 f"{doc_id}: {meta['dialect_area']}"
@@ -198,7 +197,7 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
                 "dialect_area": meta["dialect_area"],
                 "canton": meta["canton"],
                 "dialect_region": meta["region"],
-                "labels": meta["label"],
+                "dialect_code": meta["dialect_code"],
             })
 
     print(f"Loaded {len(records)} interviewee segments.")
@@ -208,20 +207,10 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
         Audio(sampling_rate=16000),
     )
 
-# def create_grouped_split(dataset: Dataset, group_column="doc_id", test_size=0.15, seed=42) -> DatasetDict:
-#     groups = np.array(dataset[group_column])
-#     gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
-#     train_indices, val_indices = next(gss.split(X=np.zeros(len(groups)), groups=groups))
-
-#     return DatasetDict({
-#         "train": dataset.select(train_indices),
-#         "validation": dataset.select(val_indices)
-#     })
-
 def split_archimob(
     dataset: Dataset, 
     group_col="doc_id", 
-    label_col="labels", 
+    label_col="dialect_code", 
     test_size=0.15, 
     seed=42,
     allow_clip_split_for_singletons=True
@@ -277,81 +266,12 @@ def split_archimob(
         "validation": dataset.select(val_indices)
     })
 
-def process_split_in_shards(split_dataset: Dataset, processor: WhisperProcessor, split_name: str, shard_size=3000) -> Dataset:
-    """Processes features in fixed-size shards to keep PyArrow memory bounded."""
-    total_samples = len(split_dataset)
-    num_shards = int(np.ceil(total_samples / shard_size))
-    shard_dir = OUTPUT_DIR / f"temp_{split_name}_shards"
-    shard_dir.mkdir(parents=True, exist_ok=True)
-
-    shard_paths = []
-
-    print(f"\nProcessing '{split_name}' split ({total_samples} samples) in {num_shards} shards...")
-
-    for i in range(num_shards):
-        shard_path = shard_dir / f"shard_{i}"
-        shard_paths.append(shard_path)
-
-        if shard_path.exists():
-            print(f"  Shard {i+1}/{num_shards} already processed. Skipping.")
-            continue
-
-        start_idx = i * shard_size
-        end_idx = min((i + 1) * shard_size, total_samples)
-        sub_ds = split_dataset.select(range(start_idx, end_idx))
-
-        def extract_features(batch):
-            audios = [sample["array"] for sample in batch["audio"]]
-            inputs = processor(audios, sampling_rate=16000, return_tensors="np")
-            return {
-                "input_features": inputs.input_features, # .astype(np.float16)
-                "labels": batch["labels"],
-            }
-
-        print(f"  Mapping shard {i+1}/{num_shards} ({end_idx - start_idx} samples)...")
-        mapped_shard = sub_ds.map(
-            extract_features,
-            batched=True,
-            batch_size=64,
-            remove_columns=sub_ds.column_names,
-            num_proc=4,
-        )
-
-        mapped_shard.save_to_disk(shard_path)
-
-        # Force garbage collection to reclaim PyArrow memory arenas
-        del sub_ds, mapped_shard
-        gc.collect()
-
-    print(f"Re-loading and combining shards for '{split_name}'...")
-    shards = [load_from_disk(p) for p in shard_paths]
-    combined_dataset = concatenate_datasets(shards)
-
-    # Clean up temporary shard directories
-    shutil.rmtree(shard_dir)
-    return combined_dataset
-
 def main():
-    processor = WhisperProcessor.from_pretrained(MODEL_ID)
     raw_dataset = load_archimob_dataset(DATA_DIR)
 
     # Perform group split by doc_id
-    #raw_splits = create_grouped_split(raw_dataset, group_column="doc_id")
     raw_splits = split_archimob(raw_dataset, group_col="doc_id")
-
-    # Process train and validation splits independently in memory-bounded shards
-    train_dataset = process_split_in_shards(raw_splits["train"], processor, split_name="train", shard_size=3000)
-    val_dataset = process_split_in_shards(raw_splits["validation"], processor, split_name="validation", shard_size=3000)
-
-    # Recombine splits
-    final_dict = DatasetDict({
-        "train": train_dataset,
-        "validation": val_dataset
-    })
-
-    final_dict.set_format("torch")
-    final_dict.save_to_disk(OUTPUT_DIR)
-    print(f"Preprocessed dataset saved successfully to {OUTPUT_DIR}")
+    raw_splits.save_to_disk(OUTPUT_DIR)
 
 if __name__ == "__main__":
     main()
@@ -364,7 +284,7 @@ if __name__ == "__main__":
 
     for split in splits:
         data = ds[split] if hasattr(ds, "keys") else ds
-        labels = data["labels"]
+        labels = data["dialect_code"]
         
         # Handle both PyTorch tensors and standard lists
         if hasattr(labels, "tolist"):

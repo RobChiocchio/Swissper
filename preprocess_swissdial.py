@@ -1,12 +1,6 @@
-from transformers import WhisperForConditionalGeneration, WhisperForAudioClassification, WhisperProcessor
-import torch
-
-import datasets
+from pathlib import Path
+from collections import Counter
 from datasets import load_dataset, load_from_disk, Audio
-
-model_id = "Flix-AI/flix-swissgerman-full"
-
-processor = WhisperProcessor.from_pretrained(model_id)
 
 labels = {
     0: "AG",
@@ -22,49 +16,11 @@ labels = {
 id2label = labels
 label2id = {v: k for k, v in labels.items()}
 
-def extract_features(batch):
-    audios = []
-
-    for sample in batch["audio"]:
-        audio = sample.get_all_samples()
-        waveform = audio.data.squeeze().numpy()
-        audios.append(waveform)
-
-    inputs = processor(
-        audios,
-        sampling_rate=16000,
-        return_tensors="np",
-    )
-
-    labels = [
-        #label2id[code.upper()]
-        code for code in batch["dialect_code"]
-    ]
-
-    return {
-        "input_features": inputs.input_features,
-        "labels": labels,
-    }
-
-class FastFeatureCollator:
-    def __call__(self, features):
-        input_features = torch.stack([
-            torch.from_numpy(f["input_features"])
-            for f in features
-        ]).to(torch.bfloat16)
-
-        labels = torch.tensor(
-            [f["labels"] for f in features],
-            dtype=torch.long,
-        )
-
-        return {
-            "input_features": input_features,
-            "labels": labels,
-        }
+AUDIO_DIR = Path("./SwissDial_16k")  # Point to pre-resampled 16kHz audio
+OUTPUT_DIR = Path("./dataset/swiss-dial-preprocessed")
 
 def main():
-    raw_dataset = load_dataset("audiofolder", data_dir="./SwissDial", split="train")
+    raw_dataset = load_dataset("audiofolder", data_dir=AUDIO_DIR, split="train")
     raw_dataset = raw_dataset.rename_column("label", "dialect_code")
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=16000))
 
@@ -82,17 +38,8 @@ def main():
             f"{count / total:.1%}",
         )
 
-    raw_dataset = raw_dataset.map(
-        extract_features,
-        batched=True,
-        batch_size=64,
-        remove_columns=raw_dataset.column_names,
-        num_proc=6,
-    )
-
-    raw_dataset.set_format("torch") # untested
-
-    raw_dataset.save_to_disk("./bucket/swissdial")
+    raw_dataset.save_to_disk(OUTPUT_DIR)
 
 if __name__ == "__main__":
     main()
+    # TODO: load transcripts
