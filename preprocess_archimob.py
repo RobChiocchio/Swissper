@@ -69,7 +69,7 @@ def parse_metadata(metadata_path):
             "dialect_area": dialect_area,
             "canton": canton,
             "region": region,
-            "dialect_code": label,
+            "labels": label,
         }
 
     return metadata
@@ -157,7 +157,7 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
 
         meta = metadata[doc_id]
 
-        if meta["dialect_code"] is None:
+        if meta["labels"] is None:
             print(
                 f"WARNING: no region mapping for "
                 f"{doc_id}: {meta['dialect_area']}"
@@ -197,7 +197,7 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
                 "dialect_area": meta["dialect_area"],
                 "canton": meta["canton"],
                 "dialect_region": meta["region"],
-                "dialect_code": meta["dialect_code"],
+                "labels": meta["labels"],
             })
 
     print(f"Loaded {len(records)} interviewee segments.")
@@ -210,7 +210,7 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
 def split_archimob(
     dataset: Dataset, 
     group_col="doc_id", 
-    label_col="dialect_code", 
+    label_col="labels", 
     test_size=0.15, 
     seed=42,
     allow_clip_split_for_singletons=True
@@ -268,10 +268,11 @@ def split_archimob(
 
 def main():
     raw_dataset = load_archimob_dataset(DATA_DIR)
+    raw_dataset.save_to_disk(OUTPUT_DIR)
 
     # Perform group split by doc_id
-    raw_splits = split_archimob(raw_dataset, group_col="doc_id")
-    raw_splits.save_to_disk(OUTPUT_DIR)
+    # raw_splits = split_archimob(raw_dataset, group_col="doc_id")
+    # raw_splits.save_to_disk(OUTPUT_DIR)
 
 if __name__ == "__main__":
     main()
@@ -284,7 +285,7 @@ if __name__ == "__main__":
 
     for split in splits:
         data = ds[split] if hasattr(ds, "keys") else ds
-        labels = data["dialect_code"]
+        labels = data["labels"]
         
         # Handle both PyTorch tensors and standard lists
         if hasattr(labels, "tolist"):

@@ -21,14 +21,14 @@ OUTPUT_DIR = Path("./dataset/swiss-dial-preprocessed")
 
 def main():
     raw_dataset = load_dataset("audiofolder", data_dir=AUDIO_DIR, split="train")
-    raw_dataset = raw_dataset.rename_column("label", "dialect_code")
+    raw_dataset = raw_dataset.rename_column("label", "labels")
     raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=16000))
 
 
     from collections import Counter
 
 
-    counts = Counter(raw_dataset["dialect_code"])
+    counts = Counter(raw_dataset["labels"])
     total = len(raw_dataset)
 
     for label, count in sorted(counts.items()):
