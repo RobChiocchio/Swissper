@@ -11,11 +11,11 @@ from peft import PeftModel
 
 from transformers import pipeline
 
-adapter_id = "RobChio/swissgerman-dialect-classifier-tiny"
+# adapter_id = "RobChio/swissgerman-dialect-classifier-tiny"
 #base_model_id = "Flix-AI/flix-swissgerman-full"
-base_model_id = "openai/whisper-tiny"
-# adapter_id = "RobChio/swissgerman-dialect-classifier-xls-r"
-# base_model_id = "facebook/wav2vec2-xls-r-300m"
+# base_model_id = "openai/whisper-tiny"
+adapter_id = "RobChio/swissgerman-dialect-classifier-xls-r"
+base_model_id = "facebook/wav2vec2-xls-r-300m"
 
 # model = WhisperForAudioClassification.from_pretrained(model_id)
 # feature_extractor = WhisperFeatureExtractor.from_pretrained(base_model_id)
