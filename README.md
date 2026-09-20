@@ -28,6 +28,19 @@ It achieves the following results on the evaluation set:
 * Re-labeled to match convention
 * For Whisper, previously pre-processed to mel-spectograms (filesize too big)
 
+### Labels
+
+The region labels are from SwissDial:
+
+* 0 AG Aargau
+* 1 BE Bern
+* 2 BS Basel
+* 3 GR Graubünden
+* 4 LU Lucerne
+* 5 SG St. Gallen
+* 6 VS Wallis (Valais)
+* 7 ZH Zurich
+
 ## Training procedure
 
 ### Training hyperparameters
