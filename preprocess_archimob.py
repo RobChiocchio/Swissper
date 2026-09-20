@@ -139,7 +139,7 @@ def parse_xml_transcripts(xml_path: Path, speaker_id: str) -> list[dict]:
 
     return records
 
-def load_archimob_dataset(data_dir: Path) -> Dataset:
+def load_archimob_dataset(data_dir: Path, min_length=1) -> Dataset:
     metadata = parse_metadata(METADATA_PATH)
 
     records = []
@@ -185,6 +185,10 @@ def load_archimob_dataset(data_dir: Path) -> Dataset:
                 #     f"WARNING: missing audio "
                 #     f"{utt['segment_id']} for {doc_id}"
                 # )
+                continue
+
+            # Filter out if too short
+            if len(utt["text"]) < min_length:
                 continue
 
             records.append({
